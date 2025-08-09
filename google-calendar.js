@@ -1,6 +1,6 @@
 import { CONFIG } from './config.js';
 
-// Google Calendar API 연동 모듈 (Google Identity Services 사용)
+// Google Calendar API 연동 모듈 (완전 분리된 GIS 방식)
 class GoogleCalendarAPI {
     constructor() {
         this.gapi = null;
@@ -12,7 +12,7 @@ class GoogleCalendarAPI {
         this.initPromise = null;
     }
 
-    // Google API 초기화 (GIS 방식)
+    // Google API 초기화 (완전 분리된 방식)
     async initialize() {
         if (this.initPromise) {
             return this.initPromise;
@@ -24,7 +24,7 @@ class GoogleCalendarAPI {
                 await this.waitForGapi();
                 await this.waitForGoogleAccounts();
                 
-                // Google API 클라이언트 초기화 (Calendar API만)
+                // Google API 클라이언트 초기화 (인증 없이, Calendar API만)
                 await new Promise((loadResolve, loadReject) => {
                     gapi.load('client', {
                         callback: () => {
@@ -38,23 +38,28 @@ class GoogleCalendarAPI {
                     });
                 });
 
-                // API 클라이언트 초기화
+                // API 클라이언트 초기화 (인증 부분 완전 제거)
                 await gapi.client.init({
                     apiKey: CONFIG.GOOGLE_API_KEY,
-                    discoveryDocs: [CONFIG.DISCOVERY_DOC],
+                    discoveryDocs: [CONFIG.DISCOVERY_DOC]
+                    // clientId 및 scope 완전 제거하여 auth2 초기화 방지
                 });
 
-                console.log('✅ gapi.client 초기화 완료');
+                console.log('✅ gapi.client 초기화 완료 (인증 분리)');
 
-                // OAuth 토큰 클라이언트 초기화 (GIS 방식)
+                // Google Identity Services OAuth 클라이언트 초기화
                 this.tokenClient = google.accounts.oauth2.initTokenClient({
                     client_id: CONFIG.GOOGLE_CLIENT_ID,
                     scope: CONFIG.SCOPES,
                     callback: (response) => {
+                        console.log('✅ OAuth 콜백 수신:', response);
                         if (response.access_token) {
                             this.accessToken = response.access_token;
                             this.isSignedIn = true;
+                            
+                            // gapi 클라이언트에 토큰 설정
                             gapi.client.setToken({ access_token: response.access_token });
+                            
                             this.handleSignIn();
                         }
                     },
@@ -62,24 +67,38 @@ class GoogleCalendarAPI {
                         console.error('❌ OAuth 오류:', error);
                         this.isSignedIn = false;
                         this.accessToken = null;
+                        this.updateAuthUI(false);
                     }
                 });
 
-                console.log('✅ OAuth 클라이언트 초기화 완료');
+                console.log('✅ GIS OAuth 클라이언트 초기화 완료');
                 this.gapi = gapi;
 
-                // 기존 토큰 확인
-                const token = gapi.client.getToken();
-                if (token && token.access_token) {
-                    this.accessToken = token.access_token;
-                    this.isSignedIn = true;
-                    await this.ensureCalendarExists();
+                // 저장된 토큰이 있는지 확인 (새로고침 후 복원용)
+                const savedToken = localStorage.getItem('google_access_token');
+                if (savedToken) {
+                    try {
+                        // 토큰 유효성 확인
+                        gapi.client.setToken({ access_token: savedToken });
+                        const testResponse = await gapi.client.calendar.calendarList.list({ maxResults: 1 });
+                        
+                        if (testResponse) {
+                            this.accessToken = savedToken;
+                            this.isSignedIn = true;
+                            await this.ensureCalendarExists();
+                            this.updateAuthUI(true);
+                        }
+                    } catch (error) {
+                        // 토큰이 만료되었으면 제거
+                        localStorage.removeItem('google_access_token');
+                        gapi.client.setToken(null);
+                    }
                 }
 
                 console.log('✅ Google Calendar API 초기화 완료');
                 resolve();
             } catch (error) {
-                console.error('❌ Google API 로드 실패:', error);
+                console.error('❌ Google API 초기화 실패:', error);
                 reject(error);
             }
         });
@@ -101,11 +120,11 @@ class GoogleCalendarAPI {
         });
     }
 
-    // Google Accounts 라이브러리 로드 대기
+    // Google Identity Services 라이브러리 로드 대기
     waitForGoogleAccounts() {
         return new Promise((resolve) => {
             const checkGoogle = () => {
-                if (window.google && window.google.accounts) {
+                if (window.google && window.google.accounts && window.google.accounts.oauth2) {
                     resolve();
                 } else {
                     setTimeout(checkGoogle, 100);
@@ -115,15 +134,20 @@ class GoogleCalendarAPI {
         });
     }
 
-    // 로그인
+    // 로그인 (GIS 방식)
     async signIn() {
         try {
             if (!this.tokenClient) {
                 throw new Error('OAuth 클라이언트가 초기화되지 않았습니다.');
             }
             
-            // GIS 방식으로 토큰 요청
-            this.tokenClient.requestAccessToken({ prompt: 'consent' });
+            console.log('🔐 Google 로그인 시작...');
+            
+            // Google Identity Services로 로그인 요청
+            this.tokenClient.requestAccessToken({ 
+                prompt: 'consent',
+                include_granted_scopes: true
+            });
             
             return true;
         } catch (error) {
@@ -136,16 +160,28 @@ class GoogleCalendarAPI {
     async signOut() {
         try {
             if (this.accessToken) {
-                google.accounts.oauth2.revoke(this.accessToken);
+                // Google Identity Services로 토큰 해제
+                google.accounts.oauth2.revoke(this.accessToken, () => {
+                    console.log('✅ 토큰 해제 완료');
+                });
             }
             
+            // 로컬 상태 정리
             gapi.client.setToken(null);
+            localStorage.removeItem('google_access_token');
+            
             this.isSignedIn = false;
             this.accessToken = null;
             this.currentUser = null;
             this.calendarId = null;
             
             this.updateAuthUI(false);
+            
+            // 인증 상태 변경 이벤트 발생
+            window.dispatchEvent(new CustomEvent('authStateChanged', {
+                detail: { isSignedIn: false, user: null }
+            }));
+            
             return true;
         } catch (error) {
             console.error('❌ 로그아웃 실패:', error);
@@ -156,14 +192,30 @@ class GoogleCalendarAPI {
     // 로그인 성공 처리
     async handleSignIn() {
         try {
-            this.currentUser = { getBasicProfile: () => ({ getEmail: () => 'user@gmail.com' }) };
+            console.log('✅ 로그인 성공 처리 시작');
+            
+            // 토큰 저장 (새로고침 시 복원용)
+            if (this.accessToken) {
+                localStorage.setItem('google_access_token', this.accessToken);
+            }
+            
+            // 가짜 사용자 객체 (실제 사용자 정보는 필요하지 않음)
+            this.currentUser = { 
+                getBasicProfile: () => ({ 
+                    getEmail: () => 'user@gmail.com' 
+                }) 
+            };
+            
+            // 캘린더 설정 및 UI 업데이트
             await this.ensureCalendarExists();
             this.updateAuthUI(true);
             
-            // 커스텀 이벤트 발생
+            // 인증 상태 변경 이벤트 발생
             window.dispatchEvent(new CustomEvent('authStateChanged', {
                 detail: { isSignedIn: true, user: this.currentUser }
             }));
+            
+            console.log('✅ 로그인 후 처리 완료');
         } catch (error) {
             console.error('❌ 로그인 후 처리 실패:', error);
         }
@@ -172,6 +224,8 @@ class GoogleCalendarAPI {
     // 전용 캘린더 확인 및 생성
     async ensureCalendarExists() {
         try {
+            console.log('📅 캘린더 확인 중...');
+            
             // 기존 캘린더 목록에서 찾기
             const response = await gapi.client.calendar.calendarList.list();
             const calendars = response.result.items || [];
@@ -184,6 +238,8 @@ class GoogleCalendarAPI {
                 this.calendarId = targetCalendar.id;
                 console.log('✅ 기존 캘린더 사용:', this.calendarId);
             } else {
+                console.log('📅 새 캘린더 생성 중...');
+                
                 // 새 캘린더 생성
                 const createResponse = await gapi.client.calendar.calendars.insert({
                     resource: {
@@ -194,7 +250,7 @@ class GoogleCalendarAPI {
                 });
 
                 this.calendarId = createResponse.result.id;
-                console.log('✅ 새 캘린더 생성:', this.calendarId);
+                console.log('✅ 새 캘린더 생성 완료:', this.calendarId);
             }
         } catch (error) {
             console.error('❌ 캘린더 설정 실패:', error);

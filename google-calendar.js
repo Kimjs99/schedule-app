@@ -21,47 +21,52 @@ class GoogleCalendarAPI {
                 // Google API 스크립트 로드 대기
                 await this.waitForGapi();
                 
-                // API 클라이언트 초기화
-                await gapi.load('client:auth2', async () => {
-                    try {
-                        await gapi.client.init({
-                            apiKey: CONFIG.GOOGLE_API_KEY,
-                            clientId: CONFIG.GOOGLE_CLIENT_ID,
-                            discoveryDocs: [CONFIG.DISCOVERY_DOC],
-                            scope: CONFIG.SCOPES
-                        });
-
-                        this.gapi = gapi;
-                        
-                        // 로그인 상태 확인
-                        const authInstance = gapi.auth2.getAuthInstance();
-                        this.isSignedIn = authInstance.isSignedIn.get();
-                        
-                        if (this.isSignedIn) {
-                            this.currentUser = authInstance.currentUser.get();
-                            await this.ensureCalendarExists();
-                        }
-
-                        // 로그인 상태 변경 리스너
-                        authInstance.isSignedIn.listen((signedIn) => {
-                            this.isSignedIn = signedIn;
-                            if (signedIn) {
-                                this.currentUser = authInstance.currentUser.get();
-                                this.ensureCalendarExists();
-                            } else {
-                                this.currentUser = null;
-                                this.calendarId = null;
-                            }
-                            this.updateAuthUI(signedIn);
-                        });
-
-                        console.log('✅ Google Calendar API 초기화 완료');
-                        resolve();
-                    } catch (error) {
-                        console.error('❌ Google API 초기화 실패:', error);
-                        reject(error);
-                    }
+                // API 클라이언트 초기화 (Promise 방식으로 변경)
+                await new Promise((loadResolve, loadReject) => {
+                    gapi.load('client:auth2', {
+                        callback: loadResolve,
+                        onerror: loadReject,
+                        timeout: 10000
+                    });
                 });
+
+                console.log('✅ gapi.client 로드 완료');
+
+                // 클라이언트 초기화
+                await gapi.client.init({
+                    apiKey: CONFIG.GOOGLE_API_KEY,
+                    clientId: CONFIG.GOOGLE_CLIENT_ID,
+                    discoveryDocs: [CONFIG.DISCOVERY_DOC],
+                    scope: CONFIG.SCOPES
+                });
+
+                console.log('✅ gapi.client 초기화 완료');
+                this.gapi = gapi;
+                
+                // 로그인 상태 확인
+                const authInstance = gapi.auth2.getAuthInstance();
+                this.isSignedIn = authInstance.isSignedIn.get();
+                
+                if (this.isSignedIn) {
+                    this.currentUser = authInstance.currentUser.get();
+                    await this.ensureCalendarExists();
+                }
+
+                // 로그인 상태 변경 리스너
+                authInstance.isSignedIn.listen((signedIn) => {
+                    this.isSignedIn = signedIn;
+                    if (signedIn) {
+                        this.currentUser = authInstance.currentUser.get();
+                        this.ensureCalendarExists();
+                    } else {
+                        this.currentUser = null;
+                        this.calendarId = null;
+                    }
+                    this.updateAuthUI(signedIn);
+                });
+
+                console.log('✅ Google Calendar API 초기화 완료');
+                resolve();
             } catch (error) {
                 console.error('❌ Google API 로드 실패:', error);
                 reject(error);

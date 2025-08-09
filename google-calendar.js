@@ -21,16 +21,18 @@ class GoogleCalendarAPI {
                 // Google API 스크립트 로드 대기
                 await this.waitForGapi();
                 
-                // API 클라이언트 초기화 (Promise 방식으로 변경)
+                // API 클라이언트 초기화 (안전한 방식)
                 await new Promise((loadResolve, loadReject) => {
-                    gapi.load('client:auth2', {
-                        callback: loadResolve,
-                        onerror: loadReject,
-                        timeout: 10000
+                    const timeoutId = setTimeout(() => {
+                        loadReject(new Error('Google API 로드 타임아웃'));
+                    }, 15000); // 15초 타임아웃
+
+                    gapi.load('client:auth2', () => {
+                        clearTimeout(timeoutId);
+                        console.log('✅ gapi.client 로드 완료');
+                        loadResolve();
                     });
                 });
-
-                console.log('✅ gapi.client 로드 완료');
 
                 // 클라이언트 초기화
                 await gapi.client.init({

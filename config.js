@@ -1,7 +1,7 @@
 // Google Calendar API 설정
 const CONFIG = {
     // Google Cloud Console에서 발급받은 API 키와 클라이언트 ID를 여기에 입력하세요
-    GOOGLE_API_KEY: 'AIzaSyDY2G-0rVETTQkeOGMSgAO9L9l3WMe6UoI',
+    GOOGLE_API_KEY: 'AIzaSyB__jm-Whxz2YwQzV8Ew5Ml_SdenxGqbMo',
     GOOGLE_CLIENT_ID: '392710857989-3lb2t4mo5onljgu2cfdear56jmej604a.apps.googleusercontent.com',
     
     // Google Calendar API 설정

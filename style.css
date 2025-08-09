@@ -94,10 +94,14 @@ header h1 {
     box-shadow: 0 3px 10px rgba(0,0,0,0.2);
 }
 
-.sync-button:disabled {
+.sync-button:disabled, .auth-button:disabled, .auth-button.disabled {
     opacity: 0.6;
     cursor: not-allowed;
     transform: none;
+}
+
+.auth-button.disabled {
+    background: #a0a0a0 !important;
 }
 
 main {

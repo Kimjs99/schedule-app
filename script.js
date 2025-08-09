@@ -13,30 +13,40 @@ class ScheduleManager {
     }
 
     async initializeApp() {
-        try {
-            // Google Calendar API 초기화
-            if (validateConfig()) {
-                await googleCalendar.initialize();
-                this.isOnline = googleCalendar.isConnected();
-            }
-        } catch (error) {
-            console.warn('Google Calendar API 초기화 실패, 오프라인 모드로 실행:', error);
-            this.isOnline = false;
-        }
-
         // 로컬 데이터 로드
         this.loadLocalSchedules();
         
         // 이벤트 리스너 초기화
         this.initializeEventListeners();
         
+        // 초기 렌더링
+        await this.renderSchedules();
+
+        try {
+            // Google Calendar API 초기화
+            if (validateConfig()) {
+                console.log('🔄 Google Calendar API 초기화 중...');
+                this.updateAuthButtonState(false, '초기화 중...');
+                
+                await googleCalendar.initialize();
+                this.isOnline = googleCalendar.isConnected();
+                
+                console.log('✅ Google Calendar API 초기화 완료');
+                this.updateAuthButtonState(true, 'Google Calendar 연동');
+            } else {
+                console.warn('⚠️ Google Calendar API 설정이 필요합니다.');
+                this.updateAuthButtonState(false, '설정 필요');
+            }
+        } catch (error) {
+            console.warn('Google Calendar API 초기화 실패, 오프라인 모드로 실행:', error);
+            this.isOnline = false;
+            this.updateAuthButtonState(false, '연동 불가');
+        }
+        
         // 인증 상태 변경 리스너
         window.addEventListener('authStateChanged', (e) => {
             this.handleAuthStateChange(e.detail);
         });
-        
-        // 초기 렌더링
-        await this.renderSchedules();
         
         console.log('✅ 스케줄 매니저 초기화 완료');
     }
@@ -292,6 +302,12 @@ class ScheduleManager {
 
     async handleAuth() {
         try {
+            // Google API가 초기화되었는지 확인
+            if (!googleCalendar.gapi) {
+                this.showNotification('Google API가 아직 초기화되지 않았습니다. 잠시 후 다시 시도해주세요.', 'error');
+                return;
+            }
+
             if (googleCalendar.isSignedIn) {
                 await googleCalendar.signOut();
                 this.isOnline = false;
@@ -305,6 +321,20 @@ class ScheduleManager {
         } catch (error) {
             console.error('인증 처리 실패:', error);
             this.showNotification('인증 중 오류가 발생했습니다.', 'error');
+        }
+    }
+
+    updateAuthButtonState(enabled, text) {
+        const authButton = document.getElementById('authButton');
+        if (authButton) {
+            authButton.disabled = !enabled;
+            authButton.textContent = text;
+            
+            if (enabled) {
+                authButton.classList.remove('disabled');
+            } else {
+                authButton.classList.add('disabled');
+            }
         }
     }
 

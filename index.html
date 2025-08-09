@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>스케줄 관리 앱</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📅 스케줄 관리</h1>
+        </header>
+        
+        <main>
+            <section class="schedule-form">
+                <h2>새 일정 추가</h2>
+                <form id="scheduleForm">
+                    <div class="form-group">
+                        <label for="title">제목</label>
+                        <input type="text" id="title" placeholder="일정 제목을 입력하세요" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="date">날짜</label>
+                        <input type="date" id="date" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="time">시간</label>
+                        <input type="time" id="time" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="description">설명</label>
+                        <textarea id="description" placeholder="일정 설명을 입력하세요" rows="3"></textarea>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="priority">우선순위</label>
+                        <select id="priority">
+                            <option value="low">낮음</option>
+                            <option value="medium" selected>보통</option>
+                            <option value="high">높음</option>
+                        </select>
+                    </div>
+                    
+                    <button type="submit">일정 추가</button>
+                </form>
+            </section>
+            
+            <section class="schedule-list">
+                <div class="list-header">
+                    <h2>일정 목록</h2>
+                    <div class="filter-controls">
+                        <select id="filterPriority">
+                            <option value="all">모든 우선순위</option>
+                            <option value="high">높음</option>
+                            <option value="medium">보통</option>
+                            <option value="low">낮음</option>
+                        </select>
+                        <button id="clearAll">모두 삭제</button>
+                    </div>
+                </div>
+                
+                <div id="scheduleList" class="schedule-items">
+                    <div class="empty-state">
+                        <p>등록된 일정이 없습니다.</p>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+    
+    <script src="script.js"></script>
+</body>
+</html>

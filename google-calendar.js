@@ -1,16 +1,18 @@
 import { CONFIG } from './config.js';
 
-// Google Calendar API 연동 모듈
+// Google Calendar API 연동 모듈 (Google Identity Services 사용)
 class GoogleCalendarAPI {
     constructor() {
         this.gapi = null;
+        this.tokenClient = null;
+        this.accessToken = null;
         this.isSignedIn = false;
         this.currentUser = null;
         this.calendarId = null;
         this.initPromise = null;
     }
 
-    // Google API 초기화
+    // Google API 초기화 (GIS 방식)
     async initialize() {
         if (this.initPromise) {
             return this.initPromise;
@@ -20,52 +22,59 @@ class GoogleCalendarAPI {
             try {
                 // Google API 스크립트 로드 대기
                 await this.waitForGapi();
+                await this.waitForGoogleAccounts();
                 
-                // API 클라이언트 초기화 (안전한 방식)
+                // Google API 클라이언트 초기화 (Calendar API만)
                 await new Promise((loadResolve, loadReject) => {
-                    const timeoutId = setTimeout(() => {
-                        loadReject(new Error('Google API 로드 타임아웃'));
-                    }, 15000); // 15초 타임아웃
-
-                    gapi.load('client:auth2', () => {
-                        clearTimeout(timeoutId);
-                        console.log('✅ gapi.client 로드 완료');
-                        loadResolve();
+                    gapi.load('client', {
+                        callback: () => {
+                            console.log('✅ gapi.client 로드 완료');
+                            loadResolve();
+                        },
+                        onerror: (error) => {
+                            console.error('❌ gapi.client 로드 실패:', error);
+                            loadReject(error);
+                        }
                     });
                 });
 
-                // 클라이언트 초기화
+                // API 클라이언트 초기화
                 await gapi.client.init({
                     apiKey: CONFIG.GOOGLE_API_KEY,
-                    clientId: CONFIG.GOOGLE_CLIENT_ID,
                     discoveryDocs: [CONFIG.DISCOVERY_DOC],
-                    scope: CONFIG.SCOPES
                 });
 
                 console.log('✅ gapi.client 초기화 완료');
+
+                // OAuth 토큰 클라이언트 초기화 (GIS 방식)
+                this.tokenClient = google.accounts.oauth2.initTokenClient({
+                    client_id: CONFIG.GOOGLE_CLIENT_ID,
+                    scope: CONFIG.SCOPES,
+                    callback: (response) => {
+                        if (response.access_token) {
+                            this.accessToken = response.access_token;
+                            this.isSignedIn = true;
+                            gapi.client.setToken({ access_token: response.access_token });
+                            this.handleSignIn();
+                        }
+                    },
+                    error_callback: (error) => {
+                        console.error('❌ OAuth 오류:', error);
+                        this.isSignedIn = false;
+                        this.accessToken = null;
+                    }
+                });
+
+                console.log('✅ OAuth 클라이언트 초기화 완료');
                 this.gapi = gapi;
-                
-                // 로그인 상태 확인
-                const authInstance = gapi.auth2.getAuthInstance();
-                this.isSignedIn = authInstance.isSignedIn.get();
-                
-                if (this.isSignedIn) {
-                    this.currentUser = authInstance.currentUser.get();
+
+                // 기존 토큰 확인
+                const token = gapi.client.getToken();
+                if (token && token.access_token) {
+                    this.accessToken = token.access_token;
+                    this.isSignedIn = true;
                     await this.ensureCalendarExists();
                 }
-
-                // 로그인 상태 변경 리스너
-                authInstance.isSignedIn.listen((signedIn) => {
-                    this.isSignedIn = signedIn;
-                    if (signedIn) {
-                        this.currentUser = authInstance.currentUser.get();
-                        this.ensureCalendarExists();
-                    } else {
-                        this.currentUser = null;
-                        this.calendarId = null;
-                    }
-                    this.updateAuthUI(signedIn);
-                });
 
                 console.log('✅ Google Calendar API 초기화 완료');
                 resolve();
@@ -92,20 +101,30 @@ class GoogleCalendarAPI {
         });
     }
 
+    // Google Accounts 라이브러리 로드 대기
+    waitForGoogleAccounts() {
+        return new Promise((resolve) => {
+            const checkGoogle = () => {
+                if (window.google && window.google.accounts) {
+                    resolve();
+                } else {
+                    setTimeout(checkGoogle, 100);
+                }
+            };
+            checkGoogle();
+        });
+    }
+
     // 로그인
     async signIn() {
         try {
-            if (!this.gapi) {
-                throw new Error('Google API가 초기화되지 않았습니다.');
+            if (!this.tokenClient) {
+                throw new Error('OAuth 클라이언트가 초기화되지 않았습니다.');
             }
             
-            const authInstance = this.gapi.auth2.getAuthInstance();
-            await authInstance.signIn();
+            // GIS 방식으로 토큰 요청
+            this.tokenClient.requestAccessToken({ prompt: 'consent' });
             
-            this.isSignedIn = true;
-            this.currentUser = authInstance.currentUser.get();
-            
-            await this.ensureCalendarExists();
             return true;
         } catch (error) {
             console.error('❌ 로그인 실패:', error);
@@ -116,19 +135,37 @@ class GoogleCalendarAPI {
     // 로그아웃
     async signOut() {
         try {
-            if (!this.gapi) return;
+            if (this.accessToken) {
+                google.accounts.oauth2.revoke(this.accessToken);
+            }
             
-            const authInstance = this.gapi.auth2.getAuthInstance();
-            await authInstance.signOut();
-            
+            gapi.client.setToken(null);
             this.isSignedIn = false;
+            this.accessToken = null;
             this.currentUser = null;
             this.calendarId = null;
             
+            this.updateAuthUI(false);
             return true;
         } catch (error) {
             console.error('❌ 로그아웃 실패:', error);
             throw error;
+        }
+    }
+
+    // 로그인 성공 처리
+    async handleSignIn() {
+        try {
+            this.currentUser = { getBasicProfile: () => ({ getEmail: () => 'user@gmail.com' }) };
+            await this.ensureCalendarExists();
+            this.updateAuthUI(true);
+            
+            // 커스텀 이벤트 발생
+            window.dispatchEvent(new CustomEvent('authStateChanged', {
+                detail: { isSignedIn: true, user: this.currentUser }
+            }));
+        } catch (error) {
+            console.error('❌ 로그인 후 처리 실패:', error);
         }
     }
 
@@ -157,16 +194,6 @@ class GoogleCalendarAPI {
                 });
 
                 this.calendarId = createResponse.result.id;
-                
-                // 캘린더 색상 설정
-                await gapi.client.calendar.calendarList.patch({
-                    calendarId: this.calendarId,
-                    resource: {
-                        backgroundColor: CONFIG.CALENDAR_COLOR,
-                        foregroundColor: '#ffffff'
-                    }
-                });
-
                 console.log('✅ 새 캘린더 생성:', this.calendarId);
             }
         } catch (error) {
@@ -328,33 +355,29 @@ class GoogleCalendarAPI {
     // 인증 UI 업데이트
     updateAuthUI(isSignedIn) {
         const authButton = document.getElementById('authButton');
-        const authStatus = document.getElementById('authStatus');
+        const authStatus = document.getElementById('connectionStatus');
         
         if (authButton) {
             if (isSignedIn) {
                 authButton.textContent = '로그아웃';
                 authButton.className = 'auth-button signed-in';
+                authButton.disabled = false;
             } else {
                 authButton.textContent = 'Google Calendar 연동';
                 authButton.className = 'auth-button signed-out';
+                authButton.disabled = false;
             }
         }
 
         if (authStatus) {
             if (isSignedIn) {
-                const email = this.currentUser?.getBasicProfile()?.getEmail() || '';
-                authStatus.textContent = `연동됨: ${email}`;
-                authStatus.className = 'auth-status connected';
+                authStatus.textContent = 'Google Calendar 연결됨';
+                authStatus.className = 'connected';
             } else {
-                authStatus.textContent = '오프라인 모드 (로컬 저장)';
-                authStatus.className = 'auth-status disconnected';
+                authStatus.textContent = '오프라인 모드';
+                authStatus.className = 'offline';
             }
         }
-
-        // 커스텀 이벤트 발생
-        window.dispatchEvent(new CustomEvent('authStateChanged', {
-            detail: { isSignedIn, user: this.currentUser }
-        }));
     }
 
     // 연결 상태 확인

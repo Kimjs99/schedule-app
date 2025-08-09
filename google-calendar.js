@@ -49,6 +49,7 @@ class GoogleCalendarAPI {
 
                 // Google Identity Services OAuth 클라이언트 초기화
                 try {
+                    // 먼저 popup 방식으로 시도
                     this.tokenClient = google.accounts.oauth2.initTokenClient({
                         client_id: CONFIG.GOOGLE_CLIENT_ID,
                         scope: CONFIG.SCOPES,
@@ -73,18 +74,28 @@ class GoogleCalendarAPI {
                         },
                         error_callback: (error) => {
                             console.error('❌ OAuth 오류:', error);
-                            this.isSignedIn = false;
-                            this.accessToken = null;
-                            this.updateAuthUI(false);
+                            // COOP 오류 시 redirect 방식으로 폴백
+                            if (error.type === 'popup_blocked_by_browser' || error.message?.includes('Cross-Origin-Opener-Policy')) {
+                                console.log('🔄 Redirect 방식으로 폴백 시도...');
+                                this.initRedirectClient();
+                            } else {
+                                this.isSignedIn = false;
+                                this.accessToken = null;
+                                this.updateAuthUI(false);
+                            }
                         }
                     });
                 } catch (tokenClientError) {
                     console.error('❌ TokenClient 초기화 실패:', tokenClientError);
-                    throw tokenClientError;
+                    // 폴백으로 redirect 방식 시도
+                    this.initRedirectClient();
                 }
 
                 console.log('✅ GIS OAuth 클라이언트 초기화 완료');
                 this.gapi = gapi;
+
+                // URL에서 액세스 토큰 확인 (redirect 모드용)
+                this.checkRedirectToken();
 
                 // 저장된 토큰이 있는지 확인 (새로고침 후 복원용)
                 const savedToken = localStorage.getItem('google_access_token');
@@ -155,6 +166,53 @@ class GoogleCalendarAPI {
         });
     }
 
+    // Redirect 방식 OAuth 클라이언트 초기화 (COOP 폴백용)
+    initRedirectClient() {
+        try {
+            console.log('🔄 Redirect 방식 OAuth 클라이언트 초기화...');
+            
+            this.tokenClient = google.accounts.oauth2.initTokenClient({
+                client_id: CONFIG.GOOGLE_CLIENT_ID,
+                scope: CONFIG.SCOPES,
+                ux_mode: 'redirect',
+                redirect_uri: window.location.origin + window.location.pathname,
+                callback: '', // redirect 모드에서는 콜백 없음
+            });
+            
+            this.useRedirectMode = true;
+            console.log('✅ Redirect OAuth 클라이언트 초기화 완료');
+        } catch (error) {
+            console.error('❌ Redirect OAuth 클라이언트 초기화 실패:', error);
+        }
+    }
+
+    // Redirect 모드에서 URL 파라미터로 전달된 토큰 확인
+    checkRedirectToken() {
+        const urlParams = new URLSearchParams(window.location.search);
+        const accessToken = urlParams.get('access_token');
+        const error = urlParams.get('error');
+
+        if (error) {
+            console.error('❌ OAuth Redirect 오류:', error);
+            return;
+        }
+
+        if (accessToken) {
+            console.log('✅ Redirect에서 토큰 수신:', accessToken.substring(0, 10) + '...');
+            this.accessToken = accessToken;
+            this.isSignedIn = true;
+            
+            // URL 정리 (토큰 제거)
+            const newUrl = window.location.pathname;
+            window.history.replaceState({}, document.title, newUrl);
+            
+            // gapi 클라이언트에 토큰 설정
+            gapi.client.setToken({ access_token: accessToken });
+            
+            this.handleSignIn();
+        }
+    }
+
     // 로그인 (GIS 방식)
     async signIn() {
         try {
@@ -164,13 +222,33 @@ class GoogleCalendarAPI {
             
             console.log('🔐 Google 로그인 시작...');
             
-            // 사용자 상호작용 후에만 토큰 요청 (COOP 정책 준수)
-            // Google Identity Services로 로그인 요청
-            this.tokenClient.requestAccessToken({
-                prompt: 'select_account',
-                include_granted_scopes: true,
-                enable_granular_consent: true
-            });
+            if (this.useRedirectMode) {
+                // Redirect 모드로 로그인
+                console.log('🔄 Redirect 모드로 로그인 진행...');
+                this.tokenClient.requestAccessToken({
+                    prompt: 'select_account',
+                    include_granted_scopes: true
+                });
+            } else {
+                // Popup 모드로 로그인
+                try {
+                    this.tokenClient.requestAccessToken({
+                        prompt: 'select_account',
+                        include_granted_scopes: true,
+                        enable_granular_consent: true
+                    });
+                } catch (popupError) {
+                    console.error('❌ Popup 로그인 실패, Redirect로 폴백:', popupError);
+                    // Popup 실패 시 redirect로 폴백
+                    this.initRedirectClient();
+                    if (this.tokenClient) {
+                        this.tokenClient.requestAccessToken({
+                            prompt: 'select_account',
+                            include_granted_scopes: true
+                        });
+                    }
+                }
+            }
             
             return true;
         } catch (error) {

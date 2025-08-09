@@ -47,49 +47,11 @@ class GoogleCalendarAPI {
 
                 console.log('✅ gapi.client 초기화 완료 (인증 분리)');
 
-                // Google Identity Services OAuth 클라이언트 초기화
-                try {
-                    // 먼저 popup 방식으로 시도
-                    this.tokenClient = google.accounts.oauth2.initTokenClient({
-                        client_id: CONFIG.GOOGLE_CLIENT_ID,
-                        scope: CONFIG.SCOPES,
-                        ux_mode: 'popup',
-                        select_account: true,
-                        callback: (response) => {
-                            console.log('✅ OAuth 콜백 수신:', response);
-                            if (response.access_token) {
-                                this.accessToken = response.access_token;
-                                this.isSignedIn = true;
-                                
-                                // gapi 클라이언트에 토큰 설정
-                                gapi.client.setToken({ access_token: response.access_token });
-                                
-                                this.handleSignIn();
-                            } else if (response.error) {
-                                console.error('❌ OAuth 응답 오류:', response.error);
-                                this.isSignedIn = false;
-                                this.accessToken = null;
-                                this.updateAuthUI(false);
-                            }
-                        },
-                        error_callback: (error) => {
-                            console.error('❌ OAuth 오류:', error);
-                            // COOP 오류 시 redirect 방식으로 폴백
-                            if (error.type === 'popup_blocked_by_browser' || error.message?.includes('Cross-Origin-Opener-Policy')) {
-                                console.log('🔄 Redirect 방식으로 폴백 시도...');
-                                this.initRedirectClient();
-                            } else {
-                                this.isSignedIn = false;
-                                this.accessToken = null;
-                                this.updateAuthUI(false);
-                            }
-                        }
-                    });
-                } catch (tokenClientError) {
-                    console.error('❌ TokenClient 초기화 실패:', tokenClientError);
-                    // 폴백으로 redirect 방식 시도
-                    this.initRedirectClient();
-                }
+                // 직접적인 OAuth URL 생성 방식 사용 (COOP 문제 회피)
+                console.log('🔄 OAuth URL 생성 방식으로 초기화...');
+                
+                this.authUrl = this.generateOAuthUrl();
+                this.useDirectUrl = true;
 
                 console.log('✅ GIS OAuth 클라이언트 초기화 완료');
                 this.gapi = gapi;
@@ -166,6 +128,21 @@ class GoogleCalendarAPI {
         });
     }
 
+    // 직접 OAuth URL 생성 (COOP 문제 완전 회피)
+    generateOAuthUrl() {
+        const baseUrl = 'https://accounts.google.com/o/oauth2/v2/auth';
+        const params = new URLSearchParams({
+            client_id: CONFIG.GOOGLE_CLIENT_ID,
+            redirect_uri: window.location.origin + window.location.pathname,
+            response_type: 'token',
+            scope: CONFIG.SCOPES,
+            include_granted_scopes: 'true',
+            state: 'schedule_app_auth'
+        });
+        
+        return `${baseUrl}?${params.toString()}`;
+    }
+
     // Redirect 방식 OAuth 클라이언트 초기화 (COOP 폴백용)
     initRedirectClient() {
         try {
@@ -188,16 +165,19 @@ class GoogleCalendarAPI {
 
     // Redirect 모드에서 URL 파라미터로 전달된 토큰 확인
     checkRedirectToken() {
-        const urlParams = new URLSearchParams(window.location.search);
-        const accessToken = urlParams.get('access_token');
-        const error = urlParams.get('error');
+        // Hash fragment에서 토큰 확인 (OAuth2 implicit flow)
+        const hash = window.location.hash.substring(1);
+        const params = new URLSearchParams(hash);
+        const accessToken = params.get('access_token');
+        const error = params.get('error');
+        const state = params.get('state');
 
         if (error) {
             console.error('❌ OAuth Redirect 오류:', error);
             return;
         }
 
-        if (accessToken) {
+        if (accessToken && state === 'schedule_app_auth') {
             console.log('✅ Redirect에서 토큰 수신:', accessToken.substring(0, 10) + '...');
             this.accessToken = accessToken;
             this.isSignedIn = true;
@@ -213,41 +193,17 @@ class GoogleCalendarAPI {
         }
     }
 
-    // 로그인 (GIS 방식)
+    // 로그인 (직접 URL 방식)
     async signIn() {
         try {
-            if (!this.tokenClient) {
-                throw new Error('OAuth 클라이언트가 초기화되지 않았습니다.');
-            }
+            console.log('🔐 Google 로그인 시작 (직접 URL 방식)...');
             
-            console.log('🔐 Google 로그인 시작...');
-            
-            if (this.useRedirectMode) {
-                // Redirect 모드로 로그인
-                console.log('🔄 Redirect 모드로 로그인 진행...');
-                this.tokenClient.requestAccessToken({
-                    prompt: 'select_account',
-                    include_granted_scopes: true
-                });
+            if (this.useDirectUrl && this.authUrl) {
+                // 직접 Google OAuth URL로 리다이렉트 (COOP 문제 없음)
+                console.log('🔄 Google OAuth 페이지로 이동...');
+                window.location.href = this.authUrl;
             } else {
-                // Popup 모드로 로그인
-                try {
-                    this.tokenClient.requestAccessToken({
-                        prompt: 'select_account',
-                        include_granted_scopes: true,
-                        enable_granular_consent: true
-                    });
-                } catch (popupError) {
-                    console.error('❌ Popup 로그인 실패, Redirect로 폴백:', popupError);
-                    // Popup 실패 시 redirect로 폴백
-                    this.initRedirectClient();
-                    if (this.tokenClient) {
-                        this.tokenClient.requestAccessToken({
-                            prompt: 'select_account',
-                            include_granted_scopes: true
-                        });
-                    }
-                }
+                throw new Error('OAuth URL이 생성되지 않았습니다.');
             }
             
             return true;

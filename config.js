@@ -1,8 +1,8 @@
 // Google Calendar API 설정
 const CONFIG = {
     // Google Cloud Console에서 발급받은 API 키와 클라이언트 ID를 여기에 입력하세요
-    GOOGLE_API_KEY: 'YOUR_API_KEY_HERE',
-    GOOGLE_CLIENT_ID: 'YOUR_CLIENT_ID_HERE',
+    GOOGLE_API_KEY: 'AIzaSyDY2G-0rVETTQkeOGMSgAO9L9l3WMe6UoI',
+    GOOGLE_CLIENT_ID: '392710857989-3lb2t4mo5onljgu2cfdear56jmej604a.apps.googleusercontent.com',
     
     // Google Calendar API 설정
     DISCOVERY_DOC: 'https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest',
@@ -16,8 +16,8 @@ const CONFIG = {
 
 // API 키와 클라이언트 ID 검증
 function validateConfig() {
-    if (CONFIG.GOOGLE_API_KEY === 'YOUR_API_KEY_HERE' || 
-        CONFIG.GOOGLE_CLIENT_ID === 'YOUR_CLIENT_ID_HERE') {
+    if (CONFIG.GOOGLE_API_KEY === 'AIzaSyDY2G-0rVETTQkeOGMSgAO9L9l3WMe6UoI' || 
+        CONFIG.GOOGLE_CLIENT_ID === '392710857989-3lb2t4mo5onljgu2cfdear56jmej604a.apps.googleusercontent.com') {
         console.warn('⚠️ Google Calendar API 설정이 필요합니다.');
         return false;
     }

@@ -17,7 +17,7 @@ const CONFIG = {
 // API 키와 클라이언트 ID 검증
 function validateConfig() {
     if (CONFIG.GOOGLE_API_KEY === 'YOUR_API_KEY_HERE' || 
-        CONFIG.GOOGLE_CLIENT_ID === 'YOUR_CLIENT_ID_HERE') {
+        CONFIG.GOOGLE_CLIENT_ID === '392710857989-3lb2t4mo5onljgu2cfdear56jmej604a.apps.googleusercontent.com') {
         console.warn('⚠️ Google Calendar API 설정이 필요합니다.');
         return false;
     }

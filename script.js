@@ -537,12 +537,38 @@ class ScheduleManager {
     }
 }
 
+// Google API 스크립트 로드 함수
+function loadGoogleAPI() {
+    return new Promise((resolve, reject) => {
+        // 이미 로드되어 있는지 확인
+        if (window.gapi) {
+            resolve();
+            return;
+        }
+
+        const script = document.createElement('script');
+        script.src = 'https://apis.google.com/js/api.js';
+        script.async = true;
+        script.defer = true;
+        
+        script.onload = () => {
+            console.log('✅ Google API 스크립트 로드 완료');
+            resolve();
+        };
+        
+        script.onerror = () => {
+            console.error('❌ Google API 스크립트 로드 실패');
+            reject(new Error('Google API script load failed'));
+        };
+        
+        document.head.appendChild(script);
+    });
+}
+
 // DOM 로드 완료 시 초기화
 document.addEventListener('DOMContentLoaded', async () => {
-    // Google API 스크립트 로드
-    const script = document.createElement('script');
-    script.src = 'https://apis.google.com/js/api.js';
-    document.head.appendChild(script);
+    // Google API 스크립트 로드 및 대기
+    await loadGoogleAPI();
 
     // 스케줄 매니저 초기화
     window.scheduleManager = new ScheduleManager();

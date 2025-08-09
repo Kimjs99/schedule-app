@@ -48,28 +48,38 @@ class GoogleCalendarAPI {
                 console.log('✅ gapi.client 초기화 완료 (인증 분리)');
 
                 // Google Identity Services OAuth 클라이언트 초기화
-                this.tokenClient = google.accounts.oauth2.initTokenClient({
-                    client_id: CONFIG.GOOGLE_CLIENT_ID,
-                    scope: CONFIG.SCOPES,
-                    callback: (response) => {
-                        console.log('✅ OAuth 콜백 수신:', response);
-                        if (response.access_token) {
-                            this.accessToken = response.access_token;
-                            this.isSignedIn = true;
-                            
-                            // gapi 클라이언트에 토큰 설정
-                            gapi.client.setToken({ access_token: response.access_token });
-                            
-                            this.handleSignIn();
+                try {
+                    this.tokenClient = google.accounts.oauth2.initTokenClient({
+                        client_id: CONFIG.GOOGLE_CLIENT_ID,
+                        scope: CONFIG.SCOPES,
+                        callback: (response) => {
+                            console.log('✅ OAuth 콜백 수신:', response);
+                            if (response.access_token) {
+                                this.accessToken = response.access_token;
+                                this.isSignedIn = true;
+                                
+                                // gapi 클라이언트에 토큰 설정
+                                gapi.client.setToken({ access_token: response.access_token });
+                                
+                                this.handleSignIn();
+                            } else if (response.error) {
+                                console.error('❌ OAuth 응답 오류:', response.error);
+                                this.isSignedIn = false;
+                                this.accessToken = null;
+                                this.updateAuthUI(false);
+                            }
+                        },
+                        error_callback: (error) => {
+                            console.error('❌ OAuth 오류:', error);
+                            this.isSignedIn = false;
+                            this.accessToken = null;
+                            this.updateAuthUI(false);
                         }
-                    },
-                    error_callback: (error) => {
-                        console.error('❌ OAuth 오류:', error);
-                        this.isSignedIn = false;
-                        this.accessToken = null;
-                        this.updateAuthUI(false);
-                    }
-                });
+                    });
+                } catch (tokenClientError) {
+                    console.error('❌ TokenClient 초기화 실패:', tokenClientError);
+                    throw tokenClientError;
+                }
 
                 console.log('✅ GIS OAuth 클라이언트 초기화 완료');
                 this.gapi = gapi;
@@ -122,10 +132,19 @@ class GoogleCalendarAPI {
 
     // Google Identity Services 라이브러리 로드 대기
     waitForGoogleAccounts() {
-        return new Promise((resolve) => {
+        return new Promise((resolve, reject) => {
+            let attempts = 0;
+            const maxAttempts = 50; // 5초 타임아웃
+            
             const checkGoogle = () => {
+                attempts++;
+                
                 if (window.google && window.google.accounts && window.google.accounts.oauth2) {
+                    console.log('✅ Google Identity Services 로드 완료');
                     resolve();
+                } else if (attempts >= maxAttempts) {
+                    console.error('❌ Google Identity Services 로드 타임아웃');
+                    reject(new Error('Google Identity Services 로드 타임아웃'));
                 } else {
                     setTimeout(checkGoogle, 100);
                 }
@@ -144,6 +163,7 @@ class GoogleCalendarAPI {
             console.log('🔐 Google 로그인 시작...');
             
             // Google Identity Services로 로그인 요청
+            // 콜백은 이미 tokenClient 초기화에서 설정됨
             this.tokenClient.requestAccessToken({ 
                 prompt: 'consent',
                 include_granted_scopes: true

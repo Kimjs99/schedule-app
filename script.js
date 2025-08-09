@@ -572,9 +572,16 @@ function loadGoogleAPI() {
     return new Promise((resolve, reject) => {
         // 이미 로드되어 있는지 확인
         if (window.gapi) {
+            console.log('✅ Google API 이미 로드됨');
             resolve();
             return;
         }
+
+        // 타임아웃 설정 (10초)
+        const timeout = setTimeout(() => {
+            console.error('❌ Google API 스크립트 로드 타임아웃');
+            reject(new Error('Google API script load timeout'));
+        }, 10000);
 
         const script = document.createElement('script');
         script.src = 'https://apis.google.com/js/api.js';
@@ -582,12 +589,14 @@ function loadGoogleAPI() {
         script.defer = true;
         
         script.onload = () => {
+            clearTimeout(timeout);
             console.log('✅ Google API 스크립트 로드 완료');
             resolve();
         };
         
-        script.onerror = () => {
-            console.error('❌ Google API 스크립트 로드 실패');
+        script.onerror = (error) => {
+            clearTimeout(timeout);
+            console.error('❌ Google API 스크립트 로드 실패:', error);
             reject(new Error('Google API script load failed'));
         };
         
@@ -597,19 +606,35 @@ function loadGoogleAPI() {
 
 // DOM 로드 완료 시 초기화
 document.addEventListener('DOMContentLoaded', async () => {
-    // Google API 스크립트 로드 및 대기
-    await loadGoogleAPI();
+    try {
+        console.log('🔄 애플리케이션 초기화 시작');
+        
+        // Google API 스크립트 로드 및 대기
+        await loadGoogleAPI();
 
-    // 스케줄 매니저 초기화
-    window.scheduleManager = new ScheduleManager();
-    
-    // 기본값 설정
-    const today = new Date().toISOString().split('T')[0];
-    document.getElementById('date').value = today;
-    
-    const now = new Date();
-    const currentTime = now.toTimeString().slice(0, 5);
-    document.getElementById('time').value = currentTime;
+        // 스케줄 매니저 초기화
+        window.scheduleManager = new ScheduleManager();
+        
+        // 기본값 설정
+        const today = new Date().toISOString().split('T')[0];
+        const dateInput = document.getElementById('date');
+        if (dateInput) {
+            dateInput.value = today;
+        }
+        
+        const now = new Date();
+        const currentTime = now.toTimeString().slice(0, 5);
+        const timeInput = document.getElementById('time');
+        if (timeInput) {
+            timeInput.value = currentTime;
+        }
+        
+        console.log('✅ 애플리케이션 초기화 완료');
+    } catch (error) {
+        console.error('❌ 애플리케이션 초기화 실패:', error);
+        // 오프라인 모드로 계속 진행
+        window.scheduleManager = new ScheduleManager();
+    }
 });
 
 // ESC 키로 폼 리셋

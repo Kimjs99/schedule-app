@@ -52,6 +52,8 @@ class GoogleCalendarAPI {
                     this.tokenClient = google.accounts.oauth2.initTokenClient({
                         client_id: CONFIG.GOOGLE_CLIENT_ID,
                         scope: CONFIG.SCOPES,
+                        ux_mode: 'popup',
+                        select_account: true,
                         callback: (response) => {
                             console.log('✅ OAuth 콜백 수신:', response);
                             if (response.access_token) {
@@ -162,16 +164,18 @@ class GoogleCalendarAPI {
             
             console.log('🔐 Google 로그인 시작...');
             
+            // 사용자 상호작용 후에만 토큰 요청 (COOP 정책 준수)
             // Google Identity Services로 로그인 요청
-            // 콜백은 이미 tokenClient 초기화에서 설정됨
-            this.tokenClient.requestAccessToken({ 
-                prompt: 'consent',
-                include_granted_scopes: true
+            this.tokenClient.requestAccessToken({
+                prompt: 'select_account',
+                include_granted_scopes: true,
+                enable_granular_consent: true
             });
             
             return true;
         } catch (error) {
             console.error('❌ 로그인 실패:', error);
+            this.updateAuthUI(false);
             throw error;
         }
     }

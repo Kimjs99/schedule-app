@@ -1,22 +1,67 @@
+import { CONFIG, validateConfig } from './config.js';
+import { googleCalendar } from './google-calendar.js';
+
+// Google Calendar 연동 스케줄 관리자
 class ScheduleManager {
     constructor() {
-        this.schedules = this.loadSchedules();
+        this.schedules = [];
         this.currentEditId = null;
+        this.isOnline = false;
+        this.syncInProgress = false;
+        
+        this.initializeApp();
+    }
+
+    async initializeApp() {
+        try {
+            // Google Calendar API 초기화
+            if (validateConfig()) {
+                await googleCalendar.initialize();
+                this.isOnline = googleCalendar.isConnected();
+            }
+        } catch (error) {
+            console.warn('Google Calendar API 초기화 실패, 오프라인 모드로 실행:', error);
+            this.isOnline = false;
+        }
+
+        // 로컬 데이터 로드
+        this.loadLocalSchedules();
+        
+        // 이벤트 리스너 초기화
         this.initializeEventListeners();
-        this.renderSchedules();
+        
+        // 인증 상태 변경 리스너
+        window.addEventListener('authStateChanged', (e) => {
+            this.handleAuthStateChange(e.detail);
+        });
+        
+        // 초기 렌더링
+        await this.renderSchedules();
+        
+        console.log('✅ 스케줄 매니저 초기화 완료');
     }
 
     initializeEventListeners() {
         const form = document.getElementById('scheduleForm');
         const clearAllBtn = document.getElementById('clearAll');
         const filterSelect = document.getElementById('filterPriority');
+        const authButton = document.getElementById('authButton');
+        const syncButton = document.getElementById('syncButton');
 
         form.addEventListener('submit', (e) => this.handleFormSubmit(e));
         clearAllBtn.addEventListener('click', () => this.clearAllSchedules());
         filterSelect.addEventListener('change', (e) => this.filterSchedules(e.target.value));
+        
+        if (authButton) {
+            authButton.addEventListener('click', () => this.handleAuth());
+        }
+        
+        if (syncButton) {
+            syncButton.addEventListener('click', () => this.syncWithGoogle());
+        }
     }
 
-    handleFormSubmit(e) {
+    async handleFormSubmit(e) {
         e.preventDefault();
         
         const formData = {
@@ -31,14 +76,19 @@ class ScheduleManager {
             return;
         }
 
-        if (this.currentEditId) {
-            this.updateSchedule(this.currentEditId, formData);
-        } else {
-            this.addSchedule(formData);
-        }
+        try {
+            if (this.currentEditId) {
+                await this.updateSchedule(this.currentEditId, formData);
+            } else {
+                await this.addSchedule(formData);
+            }
 
-        this.resetForm();
-        this.renderSchedules();
+            this.resetForm();
+            await this.renderSchedules();
+        } catch (error) {
+            console.error('일정 처리 중 오류:', error);
+            this.showNotification('일정 처리 중 오류가 발생했습니다.', 'error');
+        }
     }
 
     validateForm(data) {
@@ -57,38 +107,83 @@ class ScheduleManager {
         return true;
     }
 
-    addSchedule(data) {
+    async addSchedule(data) {
         const schedule = {
             id: Date.now().toString(),
             ...data,
-            createdAt: new Date().toISOString()
+            createdAt: new Date().toISOString(),
+            syncStatus: 'pending'
         };
-        
+
+        try {
+            if (googleCalendar.isConnected()) {
+                const googleEvent = await googleCalendar.createEvent(schedule);
+                schedule.googleEventId = googleEvent.id;
+                schedule.syncStatus = 'synced';
+                this.showNotification('일정이 Google Calendar에 추가되었습니다.', 'success');
+            } else {
+                this.showNotification('일정이 로컬에 저장되었습니다. (오프라인)', 'info');
+            }
+        } catch (error) {
+            console.error('Google Calendar 추가 실패:', error);
+            schedule.syncStatus = 'failed';
+            this.showNotification('일정을 로컬에 저장했습니다. 나중에 동기화됩니다.', 'info');
+        }
+
         this.schedules.push(schedule);
-        this.saveSchedules();
-        this.showNotification('일정이 추가되었습니다.', 'success');
+        this.saveLocalSchedules();
     }
 
-    updateSchedule(id, data) {
+    async updateSchedule(id, data) {
         const index = this.schedules.findIndex(schedule => schedule.id === id);
-        if (index !== -1) {
-            this.schedules[index] = { ...this.schedules[index], ...data };
-            this.saveSchedules();
-            this.currentEditId = null;
-            this.showNotification('일정이 수정되었습니다.', 'success');
-            
-            const submitBtn = document.querySelector('button[type="submit"]');
-            submitBtn.textContent = '일정 추가';
+        if (index === -1) return;
+
+        const schedule = this.schedules[index];
+        const updatedSchedule = { ...schedule, ...data, syncStatus: 'pending' };
+
+        try {
+            if (googleCalendar.isConnected() && schedule.googleEventId) {
+                await googleCalendar.updateEvent(schedule.googleEventId, updatedSchedule);
+                updatedSchedule.syncStatus = 'synced';
+                this.showNotification('일정이 Google Calendar에서 수정되었습니다.', 'success');
+            } else {
+                this.showNotification('일정이 로컬에서 수정되었습니다. (오프라인)', 'info');
+            }
+        } catch (error) {
+            console.error('Google Calendar 수정 실패:', error);
+            updatedSchedule.syncStatus = 'failed';
+            this.showNotification('일정을 로컬에서 수정했습니다. 나중에 동기화됩니다.', 'info');
         }
+
+        this.schedules[index] = updatedSchedule;
+        this.saveLocalSchedules();
+        this.currentEditId = null;
+
+        const submitBtn = document.querySelector('button[type="submit"]');
+        submitBtn.textContent = '일정 추가';
     }
 
-    deleteSchedule(id) {
-        if (confirm('정말로 이 일정을 삭제하시겠습니까?')) {
-            this.schedules = this.schedules.filter(schedule => schedule.id !== id);
-            this.saveSchedules();
-            this.renderSchedules();
-            this.showNotification('일정이 삭제되었습니다.', 'error');
+    async deleteSchedule(id) {
+        if (!confirm('정말로 이 일정을 삭제하시겠습니까?')) return;
+
+        const schedule = this.schedules.find(s => s.id === id);
+        if (!schedule) return;
+
+        try {
+            if (googleCalendar.isConnected() && schedule.googleEventId) {
+                await googleCalendar.deleteEvent(schedule.googleEventId);
+                this.showNotification('일정이 Google Calendar에서 삭제되었습니다.', 'success');
+            } else {
+                this.showNotification('일정이 로컬에서 삭제되었습니다.', 'info');
+            }
+        } catch (error) {
+            console.error('Google Calendar 삭제 실패:', error);
+            this.showNotification('일정을 로컬에서 삭제했습니다.', 'info');
         }
+
+        this.schedules = this.schedules.filter(schedule => schedule.id !== id);
+        this.saveLocalSchedules();
+        await this.renderSchedules();
     }
 
     editSchedule(id) {
@@ -108,17 +203,133 @@ class ScheduleManager {
         document.getElementById('title').focus();
     }
 
-    clearAllSchedules() {
+    async clearAllSchedules() {
         if (this.schedules.length === 0) {
             alert('삭제할 일정이 없습니다.');
             return;
         }
 
-        if (confirm('모든 일정을 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.')) {
-            this.schedules = [];
-            this.saveSchedules();
-            this.renderSchedules();
-            this.showNotification('모든 일정이 삭제되었습니다.', 'error');
+        if (!confirm('모든 일정을 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.')) return;
+
+        try {
+            if (googleCalendar.isConnected()) {
+                const deletePromises = this.schedules
+                    .filter(schedule => schedule.googleEventId)
+                    .map(schedule => googleCalendar.deleteEvent(schedule.googleEventId));
+                
+                await Promise.allSettled(deletePromises);
+                this.showNotification('모든 일정이 Google Calendar에서 삭제되었습니다.', 'success');
+            } else {
+                this.showNotification('모든 일정이 로컬에서 삭제되었습니다.', 'info');
+            }
+        } catch (error) {
+            console.error('일괄 삭제 중 오류:', error);
+        }
+
+        this.schedules = [];
+        this.saveLocalSchedules();
+        await this.renderSchedules();
+    }
+
+    async syncWithGoogle() {
+        if (!googleCalendar.isConnected()) {
+            this.showNotification('Google Calendar에 로그인해주세요.', 'error');
+            return;
+        }
+
+        if (this.syncInProgress) return;
+
+        this.syncInProgress = true;
+        this.updateSyncUI(true);
+
+        try {
+            // Google Calendar에서 이벤트 가져오기
+            const googleEvents = await googleCalendar.getEvents();
+            
+            // 로컬 일정 중 동기화 필요한 것들 처리
+            const syncPromises = this.schedules
+                .filter(schedule => schedule.syncStatus === 'pending' || schedule.syncStatus === 'failed')
+                .map(async (schedule) => {
+                    try {
+                        if (schedule.googleEventId) {
+                            await googleCalendar.updateEvent(schedule.googleEventId, schedule);
+                        } else {
+                            const googleEvent = await googleCalendar.createEvent(schedule);
+                            schedule.googleEventId = googleEvent.id;
+                        }
+                        schedule.syncStatus = 'synced';
+                    } catch (error) {
+                        console.error('개별 동기화 실패:', error);
+                        schedule.syncStatus = 'failed';
+                    }
+                });
+
+            await Promise.allSettled(syncPromises);
+
+            // Google Calendar의 새 이벤트들을 로컬에 추가
+            const localEventIds = new Set(this.schedules.map(s => s.googleEventId));
+            const newGoogleEvents = googleEvents.filter(event => 
+                !localEventIds.has(event.googleEventId)
+            );
+
+            newGoogleEvents.forEach(event => {
+                event.syncStatus = 'synced';
+                this.schedules.push(event);
+            });
+
+            this.saveLocalSchedules();
+            await this.renderSchedules();
+
+            this.showNotification('Google Calendar와 동기화가 완료되었습니다.', 'success');
+        } catch (error) {
+            console.error('동기화 실패:', error);
+            this.showNotification('동기화 중 오류가 발생했습니다.', 'error');
+        } finally {
+            this.syncInProgress = false;
+            this.updateSyncUI(false);
+        }
+    }
+
+    async handleAuth() {
+        try {
+            if (googleCalendar.isSignedIn) {
+                await googleCalendar.signOut();
+                this.isOnline = false;
+                this.showNotification('Google Calendar에서 로그아웃되었습니다.', 'info');
+            } else {
+                await googleCalendar.signIn();
+                this.isOnline = true;
+                this.showNotification('Google Calendar에 연결되었습니다.', 'success');
+                await this.syncWithGoogle();
+            }
+        } catch (error) {
+            console.error('인증 처리 실패:', error);
+            this.showNotification('인증 중 오류가 발생했습니다.', 'error');
+        }
+    }
+
+    handleAuthStateChange(detail) {
+        this.isOnline = detail.isSignedIn;
+        if (detail.isSignedIn) {
+            // 로그인 시 자동 동기화
+            setTimeout(() => this.syncWithGoogle(), 1000);
+        }
+        this.updateConnectionStatus();
+    }
+
+    updateConnectionStatus() {
+        const statusElement = document.getElementById('connectionStatus');
+        if (statusElement) {
+            statusElement.textContent = this.isOnline ? 'Google Calendar 연결됨' : '오프라인 모드';
+            statusElement.className = this.isOnline ? 'connected' : 'offline';
+        }
+    }
+
+    updateSyncUI(syncing) {
+        const syncButton = document.getElementById('syncButton');
+        if (syncButton) {
+            syncButton.textContent = syncing ? '동기화 중...' : '동기화';
+            syncButton.disabled = syncing;
         }
     }
 
@@ -126,7 +337,7 @@ class ScheduleManager {
         this.renderSchedules(priority);
     }
 
-    renderSchedules(filterPriority = 'all') {
+    async renderSchedules(filterPriority = 'all') {
         const container = document.getElementById('scheduleList');
         
         let filteredSchedules = this.schedules;
@@ -156,12 +367,16 @@ class ScheduleManager {
         const datetime = this.formatDateTime(schedule.date, schedule.time);
         const priorityText = this.getPriorityText(schedule.priority);
         const isOverdue = this.isOverdue(schedule.date, schedule.time);
+        const syncStatusIcon = this.getSyncStatusIcon(schedule.syncStatus);
         
         return `
             <div class="schedule-item priority-${schedule.priority} ${isOverdue ? 'overdue' : ''}" data-id="${schedule.id}">
                 <div class="schedule-header">
                     <div>
-                        <div class="schedule-title">${this.escapeHtml(schedule.title)}</div>
+                        <div class="schedule-title">
+                            ${this.escapeHtml(schedule.title)}
+                            <span class="sync-status">${syncStatusIcon}</span>
+                        </div>
                         <div class="schedule-datetime">${datetime} ${isOverdue ? '(지남)' : ''}</div>
                     </div>
                     <span class="priority-badge priority-${schedule.priority}">${priorityText}</span>
@@ -179,6 +394,16 @@ class ScheduleManager {
                 </div>
             </div>
         `;
+    }
+
+    getSyncStatusIcon(status) {
+        const icons = {
+            synced: '☁️',
+            pending: '⏳',
+            failed: '❌',
+            offline: '📱'
+        };
+        return icons[status] || icons.offline;
     }
 
     formatDateTime(date, time) {
@@ -255,6 +480,7 @@ class ScheduleManager {
             z-index: 1000;
             transform: translateX(400px);
             transition: transform 0.3s ease;
+            max-width: 300px;
             ${type === 'success' ? 'background: #38a169;' : ''}
             ${type === 'error' ? 'background: #e53e3e;' : ''}
             ${type === 'info' ? 'background: #4299e1;' : ''}
@@ -269,34 +495,59 @@ class ScheduleManager {
         setTimeout(() => {
             notification.style.transform = 'translateX(400px)';
             setTimeout(() => {
-                document.body.removeChild(notification);
+                if (document.body.contains(notification)) {
+                    document.body.removeChild(notification);
+                }
             }, 300);
-        }, 3000);
+        }, 4000);
     }
 
-    saveSchedules() {
+    saveLocalSchedules() {
         try {
-            localStorage.setItem('schedules', JSON.stringify(this.schedules));
+            localStorage.setItem('schedules_v2', JSON.stringify(this.schedules));
         } catch (error) {
-            console.error('일정 저장 중 오류가 발생했습니다:', error);
-            alert('일정 저장 중 오류가 발생했습니다. 브라우저의 저장소 설정을 확인해주세요.');
+            console.error('로컬 저장 실패:', error);
         }
     }
 
-    loadSchedules() {
+    loadLocalSchedules() {
         try {
-            const saved = localStorage.getItem('schedules');
-            return saved ? JSON.parse(saved) : [];
+            // 새 버전 데이터 로드
+            const savedV2 = localStorage.getItem('schedules_v2');
+            if (savedV2) {
+                this.schedules = JSON.parse(savedV2);
+                return;
+            }
+
+            // 기존 버전 데이터 마이그레이션
+            const savedV1 = localStorage.getItem('schedules');
+            if (savedV1) {
+                const oldSchedules = JSON.parse(savedV1);
+                this.schedules = oldSchedules.map(schedule => ({
+                    ...schedule,
+                    syncStatus: 'offline'
+                }));
+                this.saveLocalSchedules();
+                localStorage.removeItem('schedules'); // 구 데이터 삭제
+            }
         } catch (error) {
-            console.error('일정 불러오기 중 오류가 발생했습니다:', error);
-            return [];
+            console.error('로컬 데이터 로드 실패:', error);
+            this.schedules = [];
         }
     }
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+// DOM 로드 완료 시 초기화
+document.addEventListener('DOMContentLoaded', async () => {
+    // Google API 스크립트 로드
+    const script = document.createElement('script');
+    script.src = 'https://apis.google.com/js/api.js';
+    document.head.appendChild(script);
+
+    // 스케줄 매니저 초기화
     window.scheduleManager = new ScheduleManager();
     
+    // 기본값 설정
     const today = new Date().toISOString().split('T')[0];
     document.getElementById('date').value = today;
     
@@ -305,8 +556,9 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('time').value = currentTime;
 });
 
+// ESC 키로 폼 리셋
 document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
+    if (e.key === 'Escape' && window.scheduleManager) {
         scheduleManager.resetForm();
     }
 });
